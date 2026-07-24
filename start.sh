@@ -8,6 +8,6 @@ cd /var/www/html
 php artisan config:clear
 php artisan route:clear
 php artisan view:clear
-
+php artisan l5-swagger:generate
 # Iniciar servidor nativo de Laravel
 php artisan serve --host=0.0.0.0 --port=10000
