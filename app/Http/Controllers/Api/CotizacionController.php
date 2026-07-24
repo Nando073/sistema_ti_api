@@ -3,8 +3,10 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
-use App\Http\Requests\CotizacionRequest;
 use App\Models\Cotizacion;
+use App\Models\DetalleCotizacion;
+use App\Http\Requests\CotizacionRequest;
+use Illuminate\Support\Facades\DB;
 use Exception;
 use OpenApi\Attributes as OA;
 
@@ -14,7 +16,7 @@ class CotizacionController extends Controller
         path: "/api/cotizaciones",
         tags: ["Cotizaciones"],
         summary: "Obtener todas las cotizaciones activas",
-        description: "Devuelve una lista completa de cotizaciones activas (estado = 1) con sus relaciones (oferta y detalles).",
+        description: "Devuelve una lista completa de cotizaciones activas (estado = 1) con sus relaciones.",
         responses: [
             new OA\Response(
                 response: 200,
@@ -29,7 +31,6 @@ class CotizacionController extends Controller
     public function index()
     {
         try {
-            // Solo mostrar cotizaciones activas (estado = 1) con sus relaciones
             $cotizaciones = Cotizacion::with(['oferta', 'detalles'])
                 ->where('estado', 1)
                 ->get();
@@ -38,7 +39,6 @@ class CotizacionController extends Controller
                 'success' => true,
                 'data' => $cotizaciones
             ], 200);
-
         } catch (Exception $e) {
             return response()->json([
                 'success' => false,
@@ -51,12 +51,13 @@ class CotizacionController extends Controller
     #[OA\Post(
         path: "/api/cotizaciones",
         tags: ["Cotizaciones"],
-        summary: "Crear una cotización",
-        description: "Registra una nueva cotización en la base de datos. Por defecto, estado = 1 (activa).",
+        summary: "Crear una cotización con sus detalles",
+        description: "Registra una nueva cotización junto con sus detalles en una sola transacción. Todos los detalles deben enviarse en el campo 'detalles'.",
         requestBody: new OA\RequestBody(
             required: true,
             content: new OA\JsonContent(
                 properties: [
+                    // Cabecera
                     new OA\Property(property: "id_orden", type: "integer", example: 1),
                     new OA\Property(property: "id_oferta", type: "integer", example: 1),
                     new OA\Property(property: "id_cliente", type: "integer", example: 1),
@@ -64,18 +65,33 @@ class CotizacionController extends Controller
                     new OA\Property(property: "fecha_cad", type: "string", format: "date", example: "2026-08-21"),
                     new OA\Property(property: "monto_total", type: "number", format: "float", example: 1500.00),
                     new OA\Property(property: "descuento", type: "number", format: "float", example: 150.00),
-                    new OA\Property(property: "estado", type: "integer", example: 1, default: 1)
+                    new OA\Property(property: "estado", type: "integer", example: 1, default: 1),
+                    // Detalles (array)
+                    new OA\Property(
+                        property: "detalles",
+                        type: "array",
+                        description: "Lista de detalles de la cotización",
+                        items: new OA\Items(
+                            properties: [
+                                new OA\Property(property: "id_equipo", type: "integer", example: 1),
+                                new OA\Property(property: "id_repuesto", type: "integer", example: 1),
+                                new OA\Property(property: "precio", type: "number", format: "float", example: 250.50),
+                                new OA\Property(property: "cantidad", type: "integer", example: 2),
+                                new OA\Property(property: "descuento", type: "number", format: "float", example: 10.00)
+                            ]
+                        )
+                    )
                 ]
             )
         ),
         responses: [
             new OA\Response(
                 response: 201,
-                description: "Cotización creada correctamente"
+                description: "Cotización y detalles creados correctamente"
             ),
             new OA\Response(
                 response: 422,
-                description: "Error de validación"
+                description: "Error de validación (cabecera o detalles)"
             ),
             new OA\Response(
                 response: 500,
@@ -86,25 +102,34 @@ class CotizacionController extends Controller
     public function store(CotizacionRequest $request)
     {
         try {
-            // Asegurar que la cotización se crea con estado = 1 (activa)
             $data = $request->validated();
-            $data['estado'] = 1; // Forzar estado activo al crear
+            $data['estado'] = 1;
 
-            $cotizacion = Cotizacion::create($data);
+            $cotizacion = DB::transaction(function () use ($data) {
+                // 1. Crear la cotización
+                $cotizacion = Cotizacion::create($data);
 
-            // Cargar las relaciones para la respuesta
+                // 2. Crear los detalles
+                foreach ($data['detalles'] as $detalleData) {
+                    $detalleData['id_cotizacion'] = $cotizacion->id_cotizacion;
+                    $detalleData['estado'] = 1;
+                    DetalleCotizacion::create($detalleData);
+                }
+
+                return $cotizacion;
+            });
+
             $cotizacion->load(['oferta', 'detalles']);
 
             return response()->json([
                 'success' => true,
-                'message' => 'Cotización registrada correctamente.',
+                'message' => 'Cotización y detalles registrados correctamente.',
                 'data' => $cotizacion
             ], 201);
-
-        } catch (Exception $e) {
+        } catch (\Exception $e) {
             return response()->json([
                 'success' => false,
-                'message' => 'Error al registrar la cotización.',
+                'message' => 'Error al registrar la cotización y detalles.',
                 'error' => $e->getMessage()
             ], 500);
         }
@@ -121,9 +146,7 @@ class CotizacionController extends Controller
                 description: "ID de la cotización",
                 in: "path",
                 required: true,
-                schema: new OA\Schema(
-                    type: "integer"
-                )
+                schema: new OA\Schema(type: "integer")
             )
         ],
         responses: [
@@ -144,7 +167,6 @@ class CotizacionController extends Controller
     public function show($id)
     {
         try {
-            // Buscar cotización activa por ID con sus relaciones
             $cotizacion = Cotizacion::with(['oferta', 'detalles'])
                 ->where('estado', 1)
                 ->find($id);
@@ -160,7 +182,6 @@ class CotizacionController extends Controller
                 'success' => true,
                 'data' => $cotizacion
             ], 200);
-
         } catch (Exception $e) {
             return response()->json([
                 'success' => false,
@@ -173,23 +194,22 @@ class CotizacionController extends Controller
     #[OA\Put(
         path: "/api/cotizaciones/{id}",
         tags: ["Cotizaciones"],
-        summary: "Actualizar cotización",
-        description: "Actualiza la información de una cotización existente. Solo permite actualizar cotizaciones activas.",
+        summary: "Actualizar cotización y sus detalles",
+        description: "Actualiza la cabecera y reemplaza todos los detalles existentes por los nuevos enviados.",
         parameters: [
             new OA\Parameter(
                 name: "id",
                 description: "ID de la cotización",
                 in: "path",
                 required: true,
-                schema: new OA\Schema(
-                    type: "integer"
-                )
+                schema: new OA\Schema(type: "integer")
             )
         ],
         requestBody: new OA\RequestBody(
             required: true,
             content: new OA\JsonContent(
                 properties: [
+                    // Cabecera
                     new OA\Property(property: "id_orden", type: "integer", example: 1),
                     new OA\Property(property: "id_oferta", type: "integer", example: 1),
                     new OA\Property(property: "id_cliente", type: "integer", example: 1),
@@ -197,14 +217,29 @@ class CotizacionController extends Controller
                     new OA\Property(property: "fecha_cad", type: "string", format: "date", example: "2026-09-21"),
                     new OA\Property(property: "monto_total", type: "number", format: "float", example: 1800.00),
                     new OA\Property(property: "descuento", type: "number", format: "float", example: 200.00),
-                    new OA\Property(property: "estado", type: "integer", example: 1)
+                    new OA\Property(property: "estado", type: "integer", example: 1),
+                    // Detalles (array)
+                    new OA\Property(
+                        property: "detalles",
+                        type: "array",
+                        description: "Lista de nuevos detalles. Los detalles antiguos serán desactivados.",
+                        items: new OA\Items(
+                            properties: [
+                                new OA\Property(property: "id_equipo", type: "integer", example: 1),
+                                new OA\Property(property: "id_repuesto", type: "integer", example: 1),
+                                new OA\Property(property: "precio", type: "number", format: "float", example: 275.75),
+                                new OA\Property(property: "cantidad", type: "integer", example: 3),
+                                new OA\Property(property: "descuento", type: "number", format: "float", example: 15.00)
+                            ]
+                        )
+                    )
                 ]
             )
         ),
         responses: [
             new OA\Response(
                 response: 200,
-                description: "Cotización actualizada correctamente"
+                description: "Cotización y detalles actualizados correctamente"
             ),
             new OA\Response(
                 response: 404,
@@ -223,7 +258,6 @@ class CotizacionController extends Controller
     public function update(CotizacionRequest $request, $id)
     {
         try {
-            // Buscar cotización activa por ID
             $cotizacion = Cotizacion::where('estado', 1)->find($id);
 
             if (!$cotizacion) {
@@ -233,23 +267,36 @@ class CotizacionController extends Controller
                 ], 404);
             }
 
-            // Actualizar la cotización
-            $cotizacion->update($request->validated());
+            $data = $request->validated();
 
-            // Recargar la cotización con sus relaciones
+            DB::transaction(function () use ($cotizacion, $data) {
+                // Actualizar cabecera
+                $cotizacion->update($data);
+
+                // Desactivar detalles antiguos
+                DetalleCotizacion::where('id_cotizacion', $cotizacion->id_cotizacion)
+                    ->update(['estado' => 0]);
+
+                // Crear nuevos detalles
+                foreach ($data['detalles'] as $detalleData) {
+                    $detalleData['id_cotizacion'] = $cotizacion->id_cotizacion;
+                    $detalleData['estado'] = 1;
+                    DetalleCotizacion::create($detalleData);
+                }
+            });
+
             $cotizacion->refresh();
             $cotizacion->load(['oferta', 'detalles']);
 
             return response()->json([
                 'success' => true,
-                'message' => 'Cotización actualizada correctamente.',
+                'message' => 'Cotización y detalles actualizados correctamente.',
                 'data' => $cotizacion
             ], 200);
-
-        } catch (Exception $e) {
+        } catch (\Exception $e) {
             return response()->json([
                 'success' => false,
-                'message' => 'Error al actualizar la cotización.',
+                'message' => 'Error al actualizar la cotización y detalles.',
                 'error' => $e->getMessage()
             ], 500);
         }
@@ -258,23 +305,21 @@ class CotizacionController extends Controller
     #[OA\Delete(
         path: "/api/cotizaciones/{id}",
         tags: ["Cotizaciones"],
-        summary: "Eliminar cotización (lógico)",
-        description: "Cambia el estado de la cotización a 0 (inactiva) en lugar de eliminarla físicamente.",
+        summary: "Eliminar cotización y sus detalles (lógico)",
+        description: "Cambia el estado de la cotización a 0 (inactiva) y también desactiva todos sus detalles asociados.",
         parameters: [
             new OA\Parameter(
                 name: "id",
                 description: "ID de la cotización",
                 in: "path",
                 required: true,
-                schema: new OA\Schema(
-                    type: "integer"
-                )
+                schema: new OA\Schema(type: "integer")
             )
         ],
         responses: [
             new OA\Response(
                 response: 200,
-                description: "Cotización eliminada lógicamente (estado = 0)"
+                description: "Cotización y detalles eliminados lógicamente (estado = 0)"
             ),
             new OA\Response(
                 response: 404,
@@ -289,7 +334,6 @@ class CotizacionController extends Controller
     public function destroy($id)
     {
         try {
-            // Buscar cotización activa por ID
             $cotizacion = Cotizacion::where('estado', 1)->find($id);
 
             if (!$cotizacion) {
@@ -299,23 +343,19 @@ class CotizacionController extends Controller
                 ], 404);
             }
 
-            // Verificar si tiene detalles asociados
-            if ($cotizacion->detalles()->count() > 0) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'No se puede eliminar la cotización porque tiene detalles asociados.'
-                ], 400);
-            }
-
-            // Eliminación lógica: cambiar estado a 0
-            $cotizacion->update(['estado' => 0]);
+            DB::transaction(function () use ($cotizacion) {
+                // Desactivar cotización
+                $cotizacion->update(['estado' => 0]);
+                // Desactivar detalles
+                DetalleCotizacion::where('id_cotizacion', $cotizacion->id_cotizacion)
+                    ->update(['estado' => 0]);
+            });
 
             return response()->json([
                 'success' => true,
-                'message' => 'Cotización eliminada correctamente (estado = 0).'
+                'message' => 'Cotización y detalles eliminados correctamente (estado = 0).'
             ], 200);
-
-        } catch (Exception $e) {
+        } catch (\Exception $e) {
             return response()->json([
                 'success' => false,
                 'message' => 'Error al eliminar la cotización.',
@@ -324,29 +364,24 @@ class CotizacionController extends Controller
         }
     }
 
-    /**
-     * Método adicional para reactivar cotizaciones
-     */
     #[OA\Patch(
         path: "/api/cotizaciones/{id}/reactivar",
         tags: ["Cotizaciones"],
-        summary: "Reactivar cotización",
-        description: "Cambia el estado de la cotización a 1 (activa).",
+        summary: "Reactivar cotización y sus detalles",
+        description: "Cambia el estado de la cotización a 1 (activa) y también reactiva todos sus detalles asociados.",
         parameters: [
             new OA\Parameter(
                 name: "id",
                 description: "ID de la cotización",
                 in: "path",
                 required: true,
-                schema: new OA\Schema(
-                    type: "integer"
-                )
+                schema: new OA\Schema(type: "integer")
             )
         ],
         responses: [
             new OA\Response(
                 response: 200,
-                description: "Cotización reactivada correctamente"
+                description: "Cotización y detalles reactivados correctamente"
             ),
             new OA\Response(
                 response: 404,
@@ -370,18 +405,19 @@ class CotizacionController extends Controller
                 ], 404);
             }
 
-            // Reactivar: cambiar estado a 1
-            $cotizacion->update(['estado' => 1]);
+            DB::transaction(function () use ($cotizacion) {
+                $cotizacion->update(['estado' => 1]);
+                DetalleCotizacion::where('id_cotizacion', $cotizacion->id_cotizacion)
+                    ->update(['estado' => 1]);
+            });
 
-            // Cargar relaciones
             $cotizacion->load(['oferta', 'detalles']);
 
             return response()->json([
                 'success' => true,
-                'message' => 'Cotización reactivada correctamente.',
+                'message' => 'Cotización y detalles reactivados correctamente.',
                 'data' => $cotizacion
             ], 200);
-
         } catch (Exception $e) {
             return response()->json([
                 'success' => false,
