@@ -6,7 +6,7 @@
     },
     "servers": [
         {
-            "url": "https://api-soporte-ti.onrender.com/api"
+            "url": "https://sistematiapi-production.up.railway.app"
         }
     ],
     "paths": {
