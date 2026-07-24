@@ -327,7 +327,7 @@ return [
          * Constants which can be used in annotations
          */
         'constants' => [
-            'L5_SWAGGER_CONST_HOST' => env('L5_SWAGGER_CONST_HOST', 'https://sistematiapi-production.up.railway.app'),
+            'L5_SWAGGER_CONST_HOST' => env('L5_SWAGGER_CONST_HOST', 'https://sistema-ti-api-1.onrender.com'),
         ],
     ],
 ];
